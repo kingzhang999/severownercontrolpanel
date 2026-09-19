@@ -25,10 +25,38 @@ public final class ControlScreen extends Screen {
     private String respawnPlayerInput = "";
     private String respawnNameInput = "主城";
     private String respawnPositionInput = "0 64 0";
+    private String playerInput = "";
+    private String gamemodePlayer = "";
+    private String gamemodeMode = "unknown";
+    private Button gamemodeButton;
+    private String itemTargetInput = "";
+    private String itemInput = "";
+    private String itemQueryA = "";
+    private String itemTargetDesc = "";
+    private String itemIdResolved = "";
+    private String itemResolvedInput = "";
+    private String itemGroups = "";
+    private String itemPlayers = "";
+    private Boolean itemDisabled;
+    private double itemCooldown = -1;
+    private Button itemStatusButton;
 
     public ControlScreen() {
         super(Component.translatable("screen.severownercontrolpanel.title"));
         activeScreen = this;
+    }
+
+    public static void updateGameMode(String identifier, String name, String mode) {
+        if (activeScreen == null) return;
+        String input = activeScreen.playerInput.trim();
+        if (!input.equalsIgnoreCase(identifier) && !input.equalsIgnoreCase(name)) return;
+        activeScreen.gamemodePlayer = input;
+        activeScreen.gamemodeMode = mode == null || mode.isBlank() ? "unknown" : mode;
+        if (activeScreen.gamemodeButton != null) activeScreen.gamemodeButton.setMessage(activeScreen.gameModeLabel(activeScreen.gamemodeMode));
+    }
+
+    private Component gameModeLabel(String mode) {
+        return Component.translatable("screen.severownercontrolpanel.gamemode_current").append(Component.literal(mode));
     }
 
     public static void updateRespawnOptions(String selected, String encodedOptions) {
@@ -47,11 +75,17 @@ public final class ControlScreen extends Screen {
         top = (height - PANEL_HEIGHT) / 2;
         clearWidgets();
         fields.clear();
-        addRenderableWidget(tab("screen.severownercontrolpanel.players", 0, 12, 102));
-        addRenderableWidget(tab("screen.severownercontrolpanel.groups", 1, 120, 102));
-        addRenderableWidget(tab("screen.severownercontrolpanel.rules", 2, 228, 102));
-        addRenderableWidget(tab("screen.severownercontrolpanel.respawns", 3, 336, 102));
-        addRenderableWidget(tab("screen.severownercontrolpanel.teleport", 4, 444, 96));
+        String[] tabKeys = {
+                "screen.severownercontrolpanel.players",
+                "screen.severownercontrolpanel.groups",
+                "screen.severownercontrolpanel.rules",
+                "screen.severownercontrolpanel.respawns",
+                "screen.severownercontrolpanel.teleport",
+                "screen.severownercontrolpanel.items"
+        };
+        for (int index = 0; index < tabKeys.length; index++) {
+            addRenderableWidget(tab(tabKeys[index], index, 12 + index * 88, 84));
+        }
         addRenderableWidget(Button.builder(Component.translatable("screen.severownercontrolpanel.save"), button -> sendCommand("socp save"))
                 .bounds(left + 12, top + PANEL_HEIGHT - 30, 86, 20).build());
         addRenderableWidget(Button.builder(Component.translatable("screen.severownercontrolpanel.status"), button -> sendCommand("socp status"))
@@ -78,6 +112,7 @@ public final class ControlScreen extends Screen {
             case 2 -> buildRulesPage();
             case 3 -> buildRespawnsPage();
             case 4 -> buildTeleportPage();
+            case 5 -> buildItemsPage();
             default -> buildPlayersPage();
         }
     }
@@ -110,24 +145,34 @@ public final class ControlScreen extends Screen {
 
     private void buildPlayersPage() {
         graphicsLabel("screen.severownercontrolpanel.players_heading", 18, 70);
-        EditBox player = field("screen.severownercontrolpanel.player_name", "", 18, 98, 170);
+        EditBox player = field("screen.severownercontrolpanel.player_name", playerInput, 18, 98, 170);
         EditBox group = field("screen.severownercontrolpanel.group_name", "", 198, 98, 170);
         action("screen.severownercontrolpanel.group_add", 378, 98, 78, () -> sendPlayerGroup(player, group, "add"));
         action("screen.severownercontrolpanel.group_remove", 462, 98, 78, () -> sendPlayerGroup(player, group, "remove"));
         action("screen.severownercontrolpanel.panel_enable", 18, 132, 118, () -> sendPlayerPanel(player, true));
         action("screen.severownercontrolpanel.panel_disable", 142, 132, 118, () -> sendPlayerPanel(player, false));
-        action("screen.severownercontrolpanel.list_players", 266, 132, 118, () -> sendCommand("socp players"));
+        action("screen.severownercontrolpanel.player_kick", 266, 132, 86, () -> sendPlayerAction(player, "kick"));
+        playerInput = player.getValue();
+        gamemodeButton = Button.builder(gameModeLabel(gamemodePlayer.equalsIgnoreCase(playerInput.trim()) ? gamemodeMode : "unknown"), button -> {
+                    playerInput = player.getValue();
+                    gamemodePlayer = playerInput.trim();
+                    sendPlayerAction(player, "gamemode cycle");
+                }).bounds(left + 358, top + 132, 98, 20).build();
+        addRenderableWidget(gamemodeButton);
+        action("screen.severownercontrolpanel.list_players", 462, 132, 78, () -> sendCommand("socp players"));
         drawHint("screen.severownercontrolpanel.players_hint", 18, 178);
     }
 
     private void buildGroupsPage() {
         graphicsLabel("screen.severownercontrolpanel.groups_heading", 18, 70);
-        EditBox name = field("screen.severownercontrolpanel.group_name", "", 18, 98, 210);
-        EditBox color = field("screen.severownercontrolpanel.group_color", "#55FFFF", 240, 98, 130);
-        action("screen.severownercontrolpanel.group_save", 382, 98, 76, () -> sendCommand("socp groups set " + word(name) + " " + word(color)));
-        action("screen.severownercontrolpanel.group_delete", 466, 98, 74, () -> sendCommand("socp groups delete " + word(name)));
+        EditBox name = field("screen.severownercontrolpanel.group_name", "", 18, 98, 170);
+        EditBox color = field("screen.severownercontrolpanel.group_color", "red", 198, 98, 150);
+        action("screen.severownercontrolpanel.group_save", 356, 98, 76, () -> sendCommand("socp groups set " + word(name) + " " + word(color)));
+        action("screen.severownercontrolpanel.group_delete", 440, 98, 100, () -> sendCommand("socp groups delete " + word(name)));
         action("screen.severownercontrolpanel.list_groups", 18, 132, 118, () -> sendCommand("socp groups list"));
+        action("screen.severownercontrolpanel.group_kick", 142, 132, 136, () -> sendCommand("socp groups kick " + word(name)));
         drawHint("screen.severownercontrolpanel.groups_hint", 18, 178);
+        drawHint("screen.severownercontrolpanel.group_colors_hint", 18, 222);
     }
 
     private void buildRulesPage() {
@@ -185,6 +230,152 @@ public final class ControlScreen extends Screen {
         drawHint("screen.severownercontrolpanel.teleport_hint", 18, 178);
     }
 
+    // ==== 物品管理页 ====
+
+    private void buildItemsPage() {
+        graphicsLabel("screen.severownercontrolpanel.items_heading", 18, 70);
+        EditBox target = field("screen.severownercontrolpanel.item_target", itemTargetInput, 18, 98, 170);
+        EditBox item = field("screen.severownercontrolpanel.item_id", itemInput, 198, 98, 150);
+        itemStatusButton = Button.builder(itemToggleLabel(), button -> toggleItemStatus(target, item))
+                .bounds(left + 358, top + 98, 74, 20).build();
+        addRenderableWidget(itemStatusButton);
+        action("screen.severownercontrolpanel.item_query", 440, 98, 100, () -> {
+            itemTargetInput = target.getValue();
+            itemInput = item.getValue();
+            queryItemStatus();
+        });
+        action("screen.severownercontrolpanel.item_cooldown_button", 18, 132, 158, () -> openCooldownScreen(target, item));
+        action("screen.severownercontrolpanel.item_list", 184, 132, 100, () -> sendCommand("socp item list"));
+        action("screen.severownercontrolpanel.item_clear_all", 290, 132, 130, this::clearAllItemRules);
+        action("screen.severownercontrolpanel.item_blocked_list", 426, 132, 114, () -> openBlockedList(target));
+        drawHint("screen.severownercontrolpanel.items_hint", 18, 244);
+    }
+
+    /**
+     * “禁用物品列表”按钮：把输入框 A 交给服务端解析。玩家目标回物品清单直接打开玩家列表界面，
+     * 分组目标回组内玩家列表；界面开哪一个完全由服务端返回的载荷类型决定，客户端不做二次猜测。
+     */
+    private void openBlockedList(EditBox target) {
+        String value = target.getValue().trim();
+        if (value.isEmpty()) return;
+        sendCommand("socp item list_view " + quote(value));
+    }
+
+    /** 一键清除全部物品规则：命令成功后把界面显示同步回“启用 / 无冷却”。 */
+    private void clearAllItemRules() {
+        sendCommand("socp item clear");
+        itemDisabled = Boolean.FALSE;
+        itemCooldown = 0;
+        if (itemStatusButton != null) itemStatusButton.setMessage(itemToggleLabel());
+    }
+
+    private Component itemToggleLabel() {
+        return Component.translatable(Boolean.TRUE.equals(itemDisabled)
+                ? "screen.severownercontrolpanel.item_toggle_disabled"
+                : "screen.severownercontrolpanel.item_toggle_enabled");
+    }
+
+    private void toggleItemStatus(EditBox target, EditBox item) {
+        itemTargetInput = target.getValue();
+        itemInput = item.getValue();
+        if (itemTargetInput.trim().isEmpty() || itemInput.trim().isEmpty()) return;
+        String operation = Boolean.TRUE.equals(itemDisabled) ? "enable" : "disable";
+        sendItemCommand(operation);
+        itemDisabled = operation.equals("disable") ? Boolean.TRUE : Boolean.FALSE;
+        itemStatusButton.setMessage(itemToggleLabel());
+        queryItemStatus();
+    }
+
+    private void openCooldownScreen(EditBox target, EditBox item) {
+        itemTargetInput = target.getValue();
+        itemInput = item.getValue();
+        if (itemTargetInput.trim().isEmpty() || itemInput.trim().isEmpty()) return;
+        if (minecraft != null) minecraft.setScreen(new ItemCooldownScreen(this, itemTargetInput.trim(), itemInput.trim(), itemCooldown));
+    }
+
+    void queryItemStatus() {
+        itemQueryA = itemTargetInput.trim();
+        sendItemCommand("status");
+    }
+
+    /** 向服务端发送物品管理命令；中文或含空格的参数自动加引号。 */
+    void sendItemCommand(String operation) {
+        String target = itemTargetInput.trim();
+        String item = itemInput.trim();
+        if (target.isEmpty() || item.isEmpty()) return;
+        String resolved = ItemResolver.resolveToId(item);
+        // 服务端回包里的物品字段就是这里发出的规范 ID，记录后用于回包比对。
+        itemResolvedInput = resolved;
+        sendCommand("socp item " + operation + " " + quote(target) + " " + quote(resolved));
+    }
+
+    /**
+     * 冷却秒数需大于 0 且不超过 16 位整型上限，支持 1.5 这类小数。
+     * 命令语法是 /socp item cooldown &lt;对象&gt; &lt;物品&gt; &lt;秒数&gt;，秒数必须放在最后，
+     * 不能复用 sendItemCommand（那会把 operation 拼在对象/物品之前，导致服务端把物品当成秒数解析）。
+     */
+    void sendItemCooldown(String seconds) {
+        String value = seconds == null ? "" : seconds.trim();
+        if (!ItemCooldownScreen.isValidSeconds(value)) return;
+        String target = itemTargetInput.trim();
+        String item = itemInput.trim();
+        if (target.isEmpty() || item.isEmpty()) return;
+        String resolved = ItemResolver.resolveToId(item);
+        itemResolvedInput = resolved;
+        sendCommand("socp item cooldown " + quote(target) + " " + quote(resolved) + " " + value);
+    }
+
+    private String quote(String value) {
+        return value.matches("\\S+") ? value : "\"" + value + "\"";
+    }
+
+    /** 服务端回包：仅在输入未变化时套用，避免过期结果覆盖界面。 */
+    public static void applyItemStatus(String[] parts) {
+        if (activeScreen == null || parts.length < 8) return;
+        if (!parts[0].equals(activeScreen.itemQueryA) || !parts[2].equals(activeScreen.itemResolvedInput)) return;
+        activeScreen.itemTargetDesc = parts[1];
+        activeScreen.itemIdResolved = parts[3];
+        int state;
+        double cooldown;
+        try { state = Integer.parseInt(parts[4]); } catch (NumberFormatException ignored) { state = 0; }
+        try { cooldown = Double.parseDouble(parts[5]); } catch (NumberFormatException ignored) { cooldown = 0; }
+        activeScreen.itemDisabled = state == 1 ? Boolean.TRUE : Boolean.FALSE;
+        activeScreen.itemCooldown = cooldown;
+        activeScreen.itemGroups = parts[6].replace('\u001e', '、');
+        activeScreen.itemPlayers = parts[7].replace('\u001e', '、');
+        if (activeScreen.itemStatusButton != null) activeScreen.itemStatusButton.setMessage(activeScreen.itemToggleLabel());
+    }
+
+    /** 冷却秒数展示文本：整数不带小数点，小数去掉末尾多余的 0。 */
+    public static String formatSeconds(double seconds) {
+        if (Double.isNaN(seconds) || Double.isInfinite(seconds)) return Double.toString(seconds);
+        if (seconds == Math.rint(seconds) && Math.abs(seconds) < 1.0e15) return Long.toString((long) seconds);
+        return new java.math.BigDecimal(Double.toString(seconds)).stripTrailingZeros().toPlainString();
+    }
+
+    private void drawItemInfo(GuiGraphics graphics) {
+        int y = top + 162;
+        graphics.drawString(font, Component.translatable("screen.severownercontrolpanel.item_info_target",
+                Component.literal(itemTargetDesc.isEmpty() ? "—" : itemTargetDesc)), left + 18, y, 0xFFD7E4E1, false);
+        y += 13;
+        graphics.drawString(font, Component.translatable("screen.severownercontrolpanel.item_info_item",
+                Component.literal(itemIdResolved.isEmpty() ? "—" : itemIdResolved)), left + 18, y, 0xFFD7E4E1, false);
+        y += 13;
+        Component cooldownText = itemCooldown < 0 ? Component.translatable("screen.severownercontrolpanel.cooldown.unknown")
+                : itemCooldown == 0 ? Component.translatable("screen.severownercontrolpanel.cooldown.none")
+                : Component.translatable("screen.severownercontrolpanel.cooldown.seconds", formatSeconds(itemCooldown));
+        graphics.drawString(font, Component.translatable("screen.severownercontrolpanel.item_info_state", itemToggleLabel(), cooldownText), left + 18, y, 0xFFD7E4E1, false);
+        y += 13;
+        graphics.drawString(font, Component.translatable("screen.severownercontrolpanel.item_info_groups", truncateList(itemGroups)), left + 18, y, 0xFF9DB6B0, false);
+        y += 13;
+        graphics.drawString(font, Component.translatable("screen.severownercontrolpanel.item_info_players", truncateList(itemPlayers)), left + 18, y, 0xFF9DB6B0, false);
+    }
+
+    private String truncateList(String value) {
+        String clean = value.trim();
+        return clean.length() <= 80 ? clean : clean.substring(0, 80) + "…";
+    }
+
     private void sendTeleport(EditBox target, EditBox position) {
         String targetName = word(target);
         String coordinates = position.getValue().trim();
@@ -211,6 +402,11 @@ public final class ControlScreen extends Screen {
     }
 
     private void captureRespawnInputs() {
+        if (page == 5 && fields.size() >= 2) {
+            itemTargetInput = fields.get(0).getValue();
+            itemInput = fields.get(1).getValue();
+            return;
+        }
         if (page != 3 || fields.size() < 3) return;
         captureRespawnInputs(fields.get(0), fields.get(1), fields.get(2));
     }
@@ -222,11 +418,17 @@ public final class ControlScreen extends Screen {
     }
 
     private void sendPlayerGroup(EditBox player, EditBox group, String operation) {
+        playerInput = player.getValue();
         sendCommand("socp player " + word(player) + " group " + operation + " " + word(group));
     }
 
     private void sendPlayerPanel(EditBox player, boolean enabled) {
         sendCommand("socp player " + word(player) + " panel " + enabled);
+    }
+
+    private void sendPlayerAction(EditBox player, String action) {
+        String identifier = word(player);
+        if (!identifier.isBlank()) sendCommand("socp player " + identifier + " " + action);
     }
 
     private void sendRule(EditBox id, EditBox trigger, EditBox target, EditBox action, EditBox value) {
@@ -261,6 +463,7 @@ public final class ControlScreen extends Screen {
         graphics.fill(left, top, left + PANEL_WIDTH, top + 3, 0xFF41C7A3);
         graphics.drawString(font, title, left + 14, top + 10, 0xFFE9F4F1, false);
         super.render(graphics, mouseX, mouseY, partialTick);
+        if (page == 5) drawItemInfo(graphics);
     }
 
     @Override
