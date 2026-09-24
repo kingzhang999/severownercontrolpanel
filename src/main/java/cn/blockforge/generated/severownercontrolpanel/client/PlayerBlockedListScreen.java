@@ -100,6 +100,7 @@ public final class PlayerBlockedListScreen extends Screen {
     /** 面板子界面共同的父链访问；链上其余屏幕的父级一律视为面板根（ControlScreen）。 */
     static Screen parentOf(Screen screen) {
         if (screen instanceof PlayerBlockedListScreen list) return list.parent;
+        if (screen instanceof ItemCooldownScreen cooldown) return cooldown.parent;
         if (screen instanceof ItemRuleEditScreen edit) return edit.parent;
         if (screen instanceof GroupPlayerListScreen group) return group.parent;
         return null;

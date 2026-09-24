@@ -11,7 +11,8 @@ import net.minecraft.network.chat.Component;
 public final class ItemCooldownScreen extends Screen {
     private static final int PANEL_WIDTH = 380;
     private static final int PANEL_HEIGHT = 210;
-    private final ControlScreen parent;
+    /** 父界面由 PlayerBlockedListScreen.parentOf 读取，保持包内可见。 */
+    final ControlScreen parent;
     private final String target;
     private final String item;
     private final double currentCooldown;

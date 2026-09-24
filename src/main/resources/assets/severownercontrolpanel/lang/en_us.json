@@ -22,7 +22,6 @@
   "screen.severownercontrolpanel.panel_disable": "Disable panel",
   "screen.severownercontrolpanel.list_players": "List players",
   "screen.severownercontrolpanel.player_kick": "Kick player",
-  "screen.severownercontrolpanel.gamemode_cycle": "Cycle mode",
   "screen.severownercontrolpanel.gamemode_current": "Current mode: ",
   "screen.severownercontrolpanel.group_save": "Save group",
   "screen.severownercontrolpanel.group_delete": "Delete group",
@@ -117,7 +116,5 @@
   "message.severownercontrolpanel.no_permission": "You do not have permission to use management features.",
   "message.severownercontrolpanel.welcome": "Welcome back. Automated rules checked.",
   "message.severownercontrolpanel.first_join": "Welcome to the server. First-join rules executed.",
-  "message.severownercontrolpanel.block_marked": "Marked block coordinates: %s, %s, %s",
-  "message.severownercontrolpanel.respawn_saved": "Respawn point '%s' saved.",
-  "message.severownercontrolpanel.panel_hint": "Management panel ready. Press F8 to open."
+  "message.severownercontrolpanel.respawn_saved": "Respawn point '%s' saved."
 }

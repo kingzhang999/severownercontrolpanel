@@ -65,7 +65,6 @@ public final class ClientEvents {
             case "close_panel" -> {
                 if (minecraft.screen instanceof ControlScreen) minecraft.setScreen(null);
             }
-            case "clipboard" -> minecraft.keyboardHandler.setClipboard(payload.data());
             case "respawn_options" -> {
                 int separator = payload.data().indexOf('\u001f');
                 String selected = separator < 0 ? payload.data() : payload.data().substring(0, separator);

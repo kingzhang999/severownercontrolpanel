@@ -23,7 +23,6 @@
   "screen.severownercontrolpanel.panel_disable": "禁用面板",
   "screen.severownercontrolpanel.list_players": "列出玩家",
   "screen.severownercontrolpanel.player_kick": "踢出玩家",
-  "screen.severownercontrolpanel.gamemode_cycle": "循环模式",
   "screen.severownercontrolpanel.gamemode_current": "当前模式：",
   "screen.severownercontrolpanel.group_save": "保存分组",
   "screen.severownercontrolpanel.group_delete": "删除分组",
@@ -117,7 +116,5 @@
   "message.severownercontrolpanel.no_permission": "你没有使用管理功能的权限。",
   "message.severownercontrolpanel.welcome": "欢迎回来，自动化规则已检查。",
   "message.severownercontrolpanel.first_join": "欢迎首次加入服务器，自动化规则已执行。",
-  "message.severownercontrolpanel.block_marked": "已标记方块坐标：%s, %s, %s",
-  "message.severownercontrolpanel.respawn_saved": "重生点“%s”已保存。",
-  "message.severownercontrolpanel.panel_hint": "管理面板已准备，按 F8 打开。"
+  "message.severownercontrolpanel.respawn_saved": "重生点“%s”已保存。"
 }

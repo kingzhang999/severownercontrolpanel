@@ -12,7 +12,6 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
@@ -79,6 +78,8 @@ public final class ControlData {
 
     public static void init(MinecraftServer minecraftServer) {
         server = minecraftServer;
+        // 规则计时只对当前这次服务器生命周期有意义；重开存档时必须归零，否则会拿上次的游戏刻去比较。
+        lastRuleTick = 0;
         LOGGER.info("SeverOwnerControlPanel initialized; multiplayer mode={}", isMultiplayer());
         Path configDirectory = server.getServerDirectory().resolve("config");
         file = configDirectory.resolve(FILE_NAME);
@@ -92,10 +93,6 @@ public final class ControlData {
         server = null;
         file = null;
         legacyFile = null;
-    }
-
-    public static boolean isManager(CommandSenderLike source) {
-        return !source.isPlayer() || source.player().hasPermissions(2);
     }
 
     /** 面板权限由服务端实时判断；明确禁用后，即使是管理员也不能绕过。 */
@@ -174,7 +171,8 @@ public final class ControlData {
             }
         }
         for (PlayerRecord record : PLAYERS.values()) {
-            if (!record.groups.contains(target)) continue;
+            // 与 isMemberOf / effectiveItemRules 保持一致：分组名匹配忽略大小写。
+            if (!isMemberOf(record, target)) continue;
             ServerPlayer online = findOnlinePlayer(record.uuid.toString());
             if (online != null && !result.contains(online)) result.add(online);
         }
@@ -911,20 +909,6 @@ public final class ControlData {
         for (ServerPlayer player : minecraftServer.getPlayerList().getPlayers()) runRules(player, "interval");
     }
 
-    public static void markBlock(ServerPlayer player, BlockPos pos) {
-        PlayerRecord record = getPlayer(player);
-        record.pendingX = pos.getX();
-        record.pendingY = pos.getY();
-        record.pendingZ = pos.getZ();
-        record.pendingDimension = player.serverLevel().dimension().location().toString();
-        ServerLevel level = player.serverLevel();
-        level.sendParticles(ParticleTypes.END_ROD, pos.getX() + 0.5, pos.getY() + 1.2, pos.getZ() + 0.5, 16, 0.35, 0.5, 0.35, 0.03);
-        player.playNotifySound(SoundEvents.BEACON_POWER_SELECT, net.minecraft.sounds.SoundSource.PLAYERS, 0.8f, 1.2f);
-        String clipboard = pos.getX() + " " + pos.getY() + " " + pos.getZ();
-        SocpNetwork.sendToPlayer(player, new SocpPayload("clipboard", clipboard));
-        player.sendSystemMessage(Component.translatable("message.severownercontrolpanel.block_marked", pos.getX(), pos.getY(), pos.getZ()));
-    }
-
     /** 保存玩家当前位置时使用目标玩家当前所在维度。 */
     public static boolean addRespawnHere(ServerPlayer player, String name) {
         BlockPos pos = player.blockPosition();
@@ -1151,8 +1135,6 @@ public final class ControlData {
     public static String listRules() { StringBuilder builder = new StringBuilder(); RULES.forEach(rule -> builder.append(rule.id).append(" -> ").append(rule.trigger).append(" / ").append(rule.action).append("\n")); return builder.toString(); }
     public static List<String> ruleIds() { return RULES.stream().map(rule -> rule.id).toList(); }
 
-    public static String listRespawns(ServerPlayer ignored) { return listAllRespawns(); }
-
     public static String listAllRespawns() {
         StringBuilder builder = new StringBuilder();
         for (Map.Entry<UUID, PlayerRecord> entry : PLAYERS.entrySet()) {
@@ -1188,17 +1170,23 @@ public final class ControlData {
     }
 
     private static void load() {
-        PLAYERS.clear(); GROUPS.clear(); RULES.clear(); ITEM_RULES.clear(); COOLDOWN_ENDS.clear(); PENDING_OVERLAYS.clear(); ITEM_NOTICES.clear(); nextRespawnOrder = 0;
+        PLAYERS.clear(); GROUPS.clear(); RULES.clear(); ITEM_RULES.clear(); COOLDOWN_ENDS.clear(); PENDING_OVERLAYS.clear(); ITEM_NOTICES.clear(); nextRespawnOrder = 0; lastRuleTick = 0;
         if (file == null) return;
         Path source = Files.exists(file) ? file : legacyFile;
         if (source == null || !Files.exists(source)) return;
         try {
             JsonObject root;
             try { root = JsonParser.parseString(Files.readString(source, StandardCharsets.UTF_8)).getAsJsonObject(); }
-            catch (Exception invalid) {
+            catch (RuntimeException invalid) {
+                // 损坏的配置不能再静默丢弃：先说明原因，再尝试从上次保存的备份恢复。
+                LOGGER.error("配置文件 {} 内容损坏，尝试从备份恢复", source, invalid);
                 Path backup = source.resolveSibling(FILE_NAME + ".bak");
-                if (!Files.exists(backup)) return;
+                if (!Files.exists(backup)) {
+                    LOGGER.error("备份文件 {} 不存在，本次以空配置启动；请修复或删除原配置后重新保存", backup);
+                    return;
+                }
                 root = JsonParser.parseString(Files.readString(backup, StandardCharsets.UTF_8)).getAsJsonObject();
+                LOGGER.warn("已从备份 {} 恢复配置", backup);
             }
             JsonArray players = root.has("players") ? root.getAsJsonArray("players") : new JsonArray();
             for (JsonElement element : players) {
@@ -1219,7 +1207,9 @@ public final class ControlData {
             if (source.equals(legacyFile) && !source.equals(file)) {
                 LOGGER.info("读取旧版配置文件 {}；等待用户点击保存后迁移到新位置", source);
             }
-        } catch (Exception ignored) { }
+        } catch (Exception failure) {
+            LOGGER.error("读取配置文件 {} 失败，本次以空配置启动（不会覆盖磁盘内容）", source, failure);
+        }
     }
 
     private static void runRules(ServerPlayer player, String trigger) {
@@ -1248,11 +1238,8 @@ public final class ControlData {
         player.playNotifySound(SoundEvents.NOTE_BLOCK_PLING.value(), net.minecraft.sounds.SoundSource.PLAYERS, 0.5f, 1.6f);
     }
 
-    public interface CommandSenderLike { boolean isPlayer(); ServerPlayer player(); }
-
     public static final class PlayerRecord {
         UUID uuid; String name; boolean seen; Boolean panel; String selectedRespawn = "";
-        int pendingX; int pendingY; int pendingZ; String pendingDimension = "minecraft:overworld";
         final List<String> groups = new ArrayList<>(); final Map<String, RespawnPoint> respawns = new LinkedHashMap<>();
         PlayerRecord(String name) { this.name = name; }
         JsonObject toJson(String id) { JsonObject json = new JsonObject(); json.addProperty("uuid", id); json.addProperty("name", name); json.addProperty("seen", seen); if (panel == null) json.add("panel", com.google.gson.JsonNull.INSTANCE); else json.addProperty("panel", panel); json.addProperty("selectedRespawn", selectedRespawn); JsonArray groupArray = new JsonArray(); groups.forEach(groupArray::add); json.add("groups", groupArray); JsonObject respawnJson = new JsonObject(); respawns.forEach((key, point) -> respawnJson.add(key, point.toJson())); json.add("respawns", respawnJson); return json; }

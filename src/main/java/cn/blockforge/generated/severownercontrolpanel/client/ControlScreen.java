@@ -1,5 +1,6 @@
 package cn.blockforge.generated.severownercontrolpanel.client;
 
+import cn.blockforge.generated.severownercontrolpanel.data.ControlData;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
@@ -15,7 +16,6 @@ import java.util.List;
 public final class ControlScreen extends Screen {
     private static final int PANEL_WIDTH = 560;
     private static final int PANEL_HEIGHT = 330;
-    private static ControlScreen activeScreen;
     private int left;
     private int top;
     private int page;
@@ -43,16 +43,34 @@ public final class ControlScreen extends Screen {
 
     public ControlScreen() {
         super(Component.translatable("screen.severownercontrolpanel.title"));
-        activeScreen = this;
+    }
+
+    /**
+     * 当前屏幕栈上最靠近根的管理面板实例。
+     *
+     * <p>以前这里缓存一个静态引用，只在 {@link #onClose()} 里清理；跳转子界面走的是
+     * {@code Minecraft.setScreen()}，只会触发 {@code removed()} 而不会触发 {@code onClose()}，
+     * 于是面板被自己的子界面遮住时仍会保留引用，被死亡界面等顶掉后引用还会残留，属于隐性状态耦合。
+     * 改为沿着“子界面 -> 父界面”的链条从当前屏幕向上找：面板被自己的子界面遮挡时依然能找到
+     * （回包仍能更新到背后的面板），真正离开屏幕栈后引用自然失效，不需要再有额外清理。
+     */
+    private static ControlScreen activeScreen() {
+        Screen current = Minecraft.getInstance().screen;
+        while (current != null) {
+            if (current instanceof ControlScreen panel) return panel;
+            current = PlayerBlockedListScreen.parentOf(current);
+        }
+        return null;
     }
 
     public static void updateGameMode(String identifier, String name, String mode) {
-        if (activeScreen == null) return;
-        String input = activeScreen.playerInput.trim();
+        ControlScreen panel = activeScreen();
+        if (panel == null) return;
+        String input = panel.playerInput.trim();
         if (!input.equalsIgnoreCase(identifier) && !input.equalsIgnoreCase(name)) return;
-        activeScreen.gamemodePlayer = input;
-        activeScreen.gamemodeMode = mode == null || mode.isBlank() ? "unknown" : mode;
-        if (activeScreen.gamemodeButton != null) activeScreen.gamemodeButton.setMessage(activeScreen.gameModeLabel(activeScreen.gamemodeMode));
+        panel.gamemodePlayer = input;
+        panel.gamemodeMode = mode == null || mode.isBlank() ? "unknown" : mode;
+        if (panel.gamemodeButton != null) panel.gamemodeButton.setMessage(panel.gameModeLabel(panel.gamemodeMode));
     }
 
     private Component gameModeLabel(String mode) {
@@ -60,13 +78,14 @@ public final class ControlScreen extends Screen {
     }
 
     public static void updateRespawnOptions(String selected, String encodedOptions) {
-        if (activeScreen == null) return;
-        activeScreen.selectedRespawn = selected == null ? "" : selected;
-        activeScreen.respawnOptions = encodedOptions == null || encodedOptions.isBlank()
+        ControlScreen panel = activeScreen();
+        if (panel == null) return;
+        panel.selectedRespawn = selected == null ? "" : selected;
+        panel.respawnOptions = encodedOptions == null || encodedOptions.isBlank()
                 ? new ArrayList<>()
                 : new ArrayList<>(Arrays.asList(encodedOptions.split("\\u001e", -1)));
-        activeScreen.captureRespawnInputs();
-        activeScreen.init(activeScreen.minecraft, activeScreen.width, activeScreen.height);
+        panel.captureRespawnInputs();
+        panel.init(panel.minecraft, panel.width, panel.height);
     }
 
     @Override
@@ -331,26 +350,25 @@ public final class ControlScreen extends Screen {
 
     /** 服务端回包：仅在输入未变化时套用，避免过期结果覆盖界面。 */
     public static void applyItemStatus(String[] parts) {
-        if (activeScreen == null || parts.length < 8) return;
-        if (!parts[0].equals(activeScreen.itemQueryA) || !parts[2].equals(activeScreen.itemResolvedInput)) return;
-        activeScreen.itemTargetDesc = parts[1];
-        activeScreen.itemIdResolved = parts[3];
+        ControlScreen panel = activeScreen();
+        if (panel == null || parts.length < 8) return;
+        if (!parts[0].equals(panel.itemQueryA) || !parts[2].equals(panel.itemResolvedInput)) return;
+        panel.itemTargetDesc = parts[1];
+        panel.itemIdResolved = parts[3];
         int state;
         double cooldown;
         try { state = Integer.parseInt(parts[4]); } catch (NumberFormatException ignored) { state = 0; }
         try { cooldown = Double.parseDouble(parts[5]); } catch (NumberFormatException ignored) { cooldown = 0; }
-        activeScreen.itemDisabled = state == 1 ? Boolean.TRUE : Boolean.FALSE;
-        activeScreen.itemCooldown = cooldown;
-        activeScreen.itemGroups = parts[6].replace('\u001e', '、');
-        activeScreen.itemPlayers = parts[7].replace('\u001e', '、');
-        if (activeScreen.itemStatusButton != null) activeScreen.itemStatusButton.setMessage(activeScreen.itemToggleLabel());
+        panel.itemDisabled = state == 1 ? Boolean.TRUE : Boolean.FALSE;
+        panel.itemCooldown = cooldown;
+        panel.itemGroups = parts[6].replace('\u001e', '、');
+        panel.itemPlayers = parts[7].replace('\u001e', '、');
+        if (panel.itemStatusButton != null) panel.itemStatusButton.setMessage(panel.itemToggleLabel());
     }
 
-    /** 冷却秒数展示文本：整数不带小数点，小数去掉末尾多余的 0。 */
+    /** 冷却秒数展示文本：与 {@link ControlData#formatSeconds(double)} 共用同一实现，避免两处格式化结果不一致。 */
     public static String formatSeconds(double seconds) {
-        if (Double.isNaN(seconds) || Double.isInfinite(seconds)) return Double.toString(seconds);
-        if (seconds == Math.rint(seconds) && Math.abs(seconds) < 1.0e15) return Long.toString((long) seconds);
-        return new java.math.BigDecimal(Double.toString(seconds)).stripTrailingZeros().toPlainString();
+        return ControlData.formatSeconds(seconds);
     }
 
     private void drawItemInfo(GuiGraphics graphics) {
@@ -471,7 +489,6 @@ public final class ControlScreen extends Screen {
 
     @Override
     public void onClose() {
-        if (activeScreen == this) activeScreen = null;
         Minecraft.getInstance().setScreen(null);
     }
 }
