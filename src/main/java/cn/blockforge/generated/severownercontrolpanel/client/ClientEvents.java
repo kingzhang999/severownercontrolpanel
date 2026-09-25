@@ -15,6 +15,7 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.neoforge.client.event.RegisterKeyMappingsEvent;
+import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
 import org.lwjgl.glfw.GLFW;
@@ -35,6 +36,16 @@ public final class ClientEvents {
     public static void registerKeys(RegisterKeyMappingsEvent event) { event.register(OPEN_PANEL); }
 
     /**
+     * 切换世界时清空服务端同步的禁用物品缓存：否则从多人服退出后再进入本地单人存档，
+     * 上一次的禁用列表会残留，客户端仍在右键预测阶段取消使用，单人档就被“静默”地改写了行为。
+     */
+    @SubscribeEvent
+    public static void loggingIn(ClientPlayerNetworkEvent.LoggingIn event) { BLOCKED_ITEMS.clear(); }
+
+    @SubscribeEvent
+    public static void loggingOut(ClientPlayerNetworkEvent.LoggingOut event) { BLOCKED_ITEMS.clear(); }
+
+    /**
      * 食物、药水这类持续使用物品在右键瞬间会先在客户端本地预测执行 {@code ItemStack.use}，
      * 之后即使服务端取消了事件，客户端也会卡在“正在使用”状态且永远收不到结束同步。
      * 这里根据服务端同步的禁用列表在预测之前就取消，从根源上避免一直使用不结束。
@@ -53,9 +64,17 @@ public final class ClientEvents {
     public static void clientTick(ClientTickEvent.Post event) {
         Minecraft minecraft = Minecraft.getInstance();
         // F8 只发起服务端命令，是否允许打开面板完全由服务端实时决定。
-        if (OPEN_PANEL.consumeClick() && minecraft.player != null && minecraft.screen == null && minecraft.player.connection != null) {
+        // 本地单人存档下命令会被服务端静默取消，这里先不发，避免键盘操作产生任何可感知行为。
+        if (OPEN_PANEL.consumeClick() && minecraft.player != null && minecraft.screen == null
+                && minecraft.player.connection != null && !isLocalSingleplayer(minecraft)) {
             minecraft.player.connection.sendCommand("socp panel");
         }
+    }
+
+    /** 本地未开放到局域网的集成服务器即单人档；局域网开放会走多人逻辑。 */
+    private static boolean isLocalSingleplayer(Minecraft minecraft) {
+        return minecraft.hasSingleplayerServer() && minecraft.getSingleplayerServer() != null
+                && !minecraft.getSingleplayerServer().isPublished();
     }
 
     public static void handlePayload(SocpPayload payload) {
@@ -73,8 +92,9 @@ public final class ClientEvents {
             }
             case "gamemode_update" -> {
                 String[] parts = payload.data().split("\\u001f", -1);
-                if (parts.length >= 3) ControlScreen.updateGameMode(parts[0], parts[1], parts[2]);
+                if (parts.length >= 3) ControlScreen.updateGameMode(parts[0], parts[1], parts[2], parts.length >= 4 && "1".equals(parts[3]));
             }
+            case "groups_list" -> ControlScreen.updateGroupsList(payload.data());
             case "item_status" -> ControlScreen.applyItemStatus(payload.data().split("\u001f", -1));
             case "blocked_list" -> PlayerBlockedListScreen.handleListData(payload.data());
             case "group_players" -> GroupPlayerListScreen.handleGroupData(payload.data());

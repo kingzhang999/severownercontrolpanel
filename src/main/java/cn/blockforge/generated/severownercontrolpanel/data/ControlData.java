@@ -258,10 +258,11 @@ public final class ControlData {
         return count;
     }
 
-    /** 按生存、创造、冒险、旁观顺序切换玩家模式。 */
+    /** 按生存、创造、冒险、旁观顺序切换玩家模式；被锁定时由调用方负责提示，这里直接拒绝。 */
     public static String cycleGameMode(String identifier) {
         ServerPlayer target = findOnlinePlayer(identifier);
         if (target == null) return "";
+        if (isGameModeLocked(identifier)) return "";
         net.minecraft.world.level.GameType[] modes = {
                 net.minecraft.world.level.GameType.SURVIVAL,
                 net.minecraft.world.level.GameType.CREATIVE,
@@ -273,6 +274,38 @@ public final class ControlData {
         target.setGameMode(modes[next]);
         LOGGER.info("切换玩家 {} ({}) 的游戏模式为 {}", target.getName().getString(), target.getUUID(), modes[next].getName());
         return modes[next].getName();
+    }
+
+    /**
+     * 切换玩家的游戏模式锁定：锁定时记下玩家当前模式，解锁时清除记录。
+     * 参照原版难度锁定，锁定后状态切换按钮被禁用，且每 tick 强制回到锁定时的模式。
+     * 玩家必须在线才能锁定，离线返回 false。
+     */
+    public static boolean toggleGameModeLock(String identifier) {
+        ServerPlayer target = findOnlinePlayer(identifier);
+        if (target == null) return false;
+        PlayerRecord record = getPlayer(target);
+        if (record.gameModeLocked) {
+            record.gameModeLocked = false;
+            record.lockedGameMode = "";
+            LOGGER.info("解除玩家 {} ({}) 的游戏模式锁定", record.name, record.uuid);
+            return true;
+        }
+        record.gameModeLocked = true;
+        record.lockedGameMode = target.gameMode.getGameModeForPlayer().getName();
+        LOGGER.info("锁定玩家 {} ({}) 的游戏模式为 {}", record.name, record.uuid, record.lockedGameMode);
+        return true;
+    }
+
+    public static boolean isGameModeLocked(String identifier) {
+        PlayerRecord record = findPlayer(identifier);
+        return record != null && record.gameModeLocked;
+    }
+
+    /** 已登录玩家被锁定时的目标模式名；未锁定返回空串。 */
+    public static String lockedGameMode(ServerPlayer player) {
+        PlayerRecord record = player == null ? null : PLAYERS.get(player.getUUID());
+        return record == null || !record.gameModeLocked ? "" : record.lockedGameMode;
     }
 
     private static void logOperation(String operation, String detail) {
@@ -635,9 +668,9 @@ public final class ControlData {
         return false;
     }
 
-    /** 玩家（含其所在分组）是否被禁止使用该物品。 */
+    /** 玩家（含其所在分组）是否被禁止使用该物品。单人本地存档下模组完全静默，一律不拦截。 */
     public static boolean isItemBlocked(ServerPlayer player, Item item) {
-        if (ITEM_RULES.isEmpty()) return false;
+        if (!isMultiplayer() || ITEM_RULES.isEmpty()) return false;
         String id = itemId(item);
         PlayerRecord record = PLAYERS.get(player.getUUID());
         for (ItemRuleRecord rule : ITEM_RULES) {
@@ -651,7 +684,7 @@ public final class ControlData {
      * 服务端依旧会拦下物品本身的效果，只是动画由原版自行处理。
      */
     public static void notifyStopUsing(ServerPlayer player) {
-        if (player == null) return;
+        if (!isMultiplayer() || player == null) return;
         SocpNetwork.sendToPlayer(player, new SocpPayload("stop_using", ""));
     }
 
@@ -660,7 +693,7 @@ public final class ControlData {
      * 避免食物、药水这类持续使用物品进入原版的“正在使用”状态却永远收不到结束同步。
      */
     public static void syncBlockedItems(ServerPlayer player) {
-        if (player == null) return;
+        if (!isMultiplayer() || player == null) return;
         PlayerRecord record = PLAYERS.get(player.getUUID());
         List<String> ids = new ArrayList<>();
         for (ItemRuleRecord rule : ITEM_RULES) {
@@ -671,7 +704,7 @@ public final class ControlData {
 
     /** 物品规则或分组变化后，刷新所有在线客户端的禁用列表。 */
     private static void broadcastBlockedItems() {
-        if (server == null) return;
+        if (!isMultiplayer() || server == null) return;
         for (ServerPlayer player : server.getPlayerList().getPlayers()) syncBlockedItems(player);
     }
 
@@ -691,7 +724,7 @@ public final class ControlData {
 
     /** 取所有命中规则中的最长冷却（秒），保留小数精度。 */
     public static double effectiveCooldown(ServerPlayer player, Item item) {
-        if (ITEM_RULES.isEmpty()) return 0;
+        if (!isMultiplayer() || ITEM_RULES.isEmpty()) return 0;
         String id = itemId(item);
         PlayerRecord record = PLAYERS.get(player.getUUID());
         double best = 0;
@@ -716,7 +749,7 @@ public final class ControlData {
      * 被冷却物品都会触发事件并给出“剩余秒数”的聊天提示；把冷却配置改成 0 会立即解除。
      */
     public static boolean allowUseItem(ServerPlayer player, ItemStack stack, boolean mark) {
-        if (stack.isEmpty()) return true;
+        if (!isMultiplayer() || stack.isEmpty()) return true;
         Item item = stack.getItem();
         if (isItemBlocked(player, item)) {
             if (shouldNotify(player)) player.sendSystemMessage(Component.translatable("message.severownercontrolpanel.item_blocked"));
@@ -852,7 +885,7 @@ public final class ControlData {
      * 传入 {@code stack} 应为使用前的物品，调用方需在使用完成事件里取原始物品栈。
      */
     public static void markItemUsed(ServerPlayer player, ItemStack stack) {
-        if (player == null || stack.isEmpty()) return;
+        if (!isMultiplayer() || player == null || stack.isEmpty()) return;
         Item item = stack.getItem();
         if (isItemBlocked(player, item)) return;
         double cooldown = effectiveCooldown(player, item);
@@ -900,6 +933,7 @@ public final class ControlData {
 
     public static void tick(MinecraftServer minecraftServer) {
         if (!isMultiplayer()) return;
+        enforceGameModeLocks(minecraftServer);
         flushPendingCooldowns();
         pruneExpiredCooldowns();
         stopBlockedUses(minecraftServer);
@@ -907,6 +941,20 @@ public final class ControlData {
         if (tick - lastRuleTick < 20) return;
         lastRuleTick = tick;
         for (ServerPlayer player : minecraftServer.getPlayerList().getPlayers()) runRules(player, "interval");
+    }
+
+    /**
+     * 被锁定游戏模式的在线玩家每 tick 拉回锁定时的模式，堵住 /gamemode、F3+F4 等旁路。
+     * 与原版难度锁定一样是“状态锁定”，而不是只禁用按钮。
+     */
+    private static void enforceGameModeLocks(MinecraftServer minecraftServer) {
+        for (ServerPlayer player : minecraftServer.getPlayerList().getPlayers()) {
+            String locked = lockedGameMode(player);
+            if (locked.isBlank()) continue;
+            net.minecraft.world.level.GameType expected = net.minecraft.world.level.GameType.byName(locked);
+            if (expected == null || player.gameMode.getGameModeForPlayer() == expected) continue;
+            player.setGameMode(expected);
+        }
     }
 
     /** 保存玩家当前位置时使用目标玩家当前所在维度。 */
@@ -1240,10 +1288,11 @@ public final class ControlData {
 
     public static final class PlayerRecord {
         UUID uuid; String name; boolean seen; Boolean panel; String selectedRespawn = "";
+        boolean gameModeLocked; String lockedGameMode = "";
         final List<String> groups = new ArrayList<>(); final Map<String, RespawnPoint> respawns = new LinkedHashMap<>();
         PlayerRecord(String name) { this.name = name; }
-        JsonObject toJson(String id) { JsonObject json = new JsonObject(); json.addProperty("uuid", id); json.addProperty("name", name); json.addProperty("seen", seen); if (panel == null) json.add("panel", com.google.gson.JsonNull.INSTANCE); else json.addProperty("panel", panel); json.addProperty("selectedRespawn", selectedRespawn); JsonArray groupArray = new JsonArray(); groups.forEach(groupArray::add); json.add("groups", groupArray); JsonObject respawnJson = new JsonObject(); respawns.forEach((key, point) -> respawnJson.add(key, point.toJson())); json.add("respawns", respawnJson); return json; }
-        static PlayerRecord fromJson(JsonObject json) { PlayerRecord record = new PlayerRecord(json.has("name") ? json.get("name").getAsString() : "未知"); record.seen = getBoolean(json, "seen"); record.panel = json.has("panel") && !json.get("panel").isJsonNull() ? json.get("panel").getAsBoolean() : null; record.selectedRespawn = json.has("selectedRespawn") ? json.get("selectedRespawn").getAsString() : ""; if (json.has("groups")) json.getAsJsonArray("groups").forEach(e -> record.groups.add(e.getAsString())); if (json.has("respawns")) json.getAsJsonObject("respawns").entrySet().forEach(e -> record.respawns.put(e.getKey(), RespawnPoint.fromJson(e.getKey(), e.getValue().getAsJsonObject()))); return record; }
+        JsonObject toJson(String id) { JsonObject json = new JsonObject(); json.addProperty("uuid", id); json.addProperty("name", name); json.addProperty("seen", seen); if (panel == null) json.add("panel", com.google.gson.JsonNull.INSTANCE); else json.addProperty("panel", panel); json.addProperty("selectedRespawn", selectedRespawn); json.addProperty("gameModeLocked", gameModeLocked); json.addProperty("lockedGameMode", lockedGameMode); JsonArray groupArray = new JsonArray(); groups.forEach(groupArray::add); json.add("groups", groupArray); JsonObject respawnJson = new JsonObject(); respawns.forEach((key, point) -> respawnJson.add(key, point.toJson())); json.add("respawns", respawnJson); return json; }
+        static PlayerRecord fromJson(JsonObject json) { PlayerRecord record = new PlayerRecord(json.has("name") ? json.get("name").getAsString() : "未知"); record.seen = getBoolean(json, "seen"); record.panel = json.has("panel") && !json.get("panel").isJsonNull() ? json.get("panel").getAsBoolean() : null; record.selectedRespawn = json.has("selectedRespawn") ? json.get("selectedRespawn").getAsString() : ""; record.gameModeLocked = getBoolean(json, "gameModeLocked"); record.lockedGameMode = json.has("lockedGameMode") ? json.get("lockedGameMode").getAsString() : ""; if (json.has("groups")) json.getAsJsonArray("groups").forEach(e -> record.groups.add(e.getAsString())); if (json.has("respawns")) json.getAsJsonObject("respawns").entrySet().forEach(e -> record.respawns.put(e.getKey(), RespawnPoint.fromJson(e.getKey(), e.getValue().getAsJsonObject()))); return record; }
     }
     public static final class GroupRecord { String name; String color; GroupRecord(String name, String color) { this.name = name; this.color = color; } JsonObject toJson() { JsonObject json = new JsonObject(); json.addProperty("name", name); json.addProperty("color", color); return json; } static GroupRecord fromJson(JsonObject json) { return new GroupRecord(json.get("name").getAsString(), normalizeColor(json.has("color") ? json.get("color").getAsString() : "#55FFFF")); } }
     public static final class RespawnPoint { String name; String dimension; int x; int y; int z; long order; RespawnPoint(String name, String dimension, int x, int y, int z, long order) { this.name=name; this.dimension=dimension; this.x=x; this.y=y; this.z=z; this.order=order; } JsonObject toJson() { JsonObject json = new JsonObject(); json.addProperty("dimension", dimension); json.addProperty("x", x); json.addProperty("y", y); json.addProperty("z", z); json.addProperty("order", order); return json; } static RespawnPoint fromJson(String name, JsonObject json) { return new RespawnPoint(name, json.get("dimension").getAsString(), json.get("x").getAsInt(), json.get("y").getAsInt(), json.get("z").getAsInt(), json.has("order") ? json.get("order").getAsLong() : -1L); } }

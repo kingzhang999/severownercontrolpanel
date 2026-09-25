@@ -5,6 +5,7 @@ import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.item.Items;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -52,5 +53,15 @@ public final class ItemResolver {
         String translated = I18n.get(key);
         if (translated.equals(key)) return key.substring(key.lastIndexOf('.') + 1).replace('_', ' ').toLowerCase(Locale.ROOT);
         return translated.toLowerCase(Locale.ROOT);
+    }
+
+    /** 用注册表 ID 取当前语言的显示名；ID 非法或查不到时原样返回，保证界面不会出现空白。 */
+    public static String displayOfId(String itemId) {
+        if (itemId == null || itemId.isBlank()) return "";
+        ResourceLocation location = ResourceLocation.tryParse(itemId);
+        Item item = location == null ? null : BuiltInRegistries.ITEM.get(location);
+        if (item == null || item == Items.AIR) return itemId;
+        String display = displayOf(item);
+        return display == null || display.isEmpty() ? itemId : display;
     }
 }

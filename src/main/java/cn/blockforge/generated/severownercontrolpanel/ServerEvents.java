@@ -29,13 +29,16 @@ public final class ServerEvents {
 
         var source = event.getParseResults().getContext().getSource();
         ServerPlayer player = source.getPlayer();
-        // 事件层覆盖未安装客户端、旧聊天按钮和权限变更后的所有命令请求。
-        if (!ControlData.isMultiplayer() || player != null && !ControlData.canUsePanel(player)) {
+        // 本地单人存档下模组完全静默：直接吞掉 socp 命令，不执行也不发任何提示。
+        if (!ControlData.isMultiplayer()) {
             event.setCanceled(true);
-            if (player != null) {
-                player.sendSystemMessage(net.minecraft.network.chat.Component.translatable(
-                        "message.severownercontrolpanel.no_permission"));
-            }
+            return;
+        }
+        // 事件层覆盖未安装客户端、旧聊天按钮和权限变更后的所有命令请求。
+        if (player != null && !ControlData.canUsePanel(player)) {
+            event.setCanceled(true);
+            player.sendSystemMessage(net.minecraft.network.chat.Component.translatable(
+                    "message.severownercontrolpanel.no_permission"));
         }
     }
 

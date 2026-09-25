@@ -28,7 +28,10 @@ public final class ControlScreen extends Screen {
     private String playerInput = "";
     private String gamemodePlayer = "";
     private String gamemodeMode = "unknown";
+    private boolean gamemodeLocked;
     private Button gamemodeButton;
+    private Button gamemodeLockButton;
+    private String groupsListText = "";
     private String itemTargetInput = "";
     private String itemInput = "";
     private String itemQueryA = "";
@@ -63,18 +66,53 @@ public final class ControlScreen extends Screen {
         return null;
     }
 
-    public static void updateGameMode(String identifier, String name, String mode) {
+    public static void updateGameMode(String identifier, String name, String mode, boolean locked) {
         ControlScreen panel = activeScreen();
         if (panel == null) return;
         String input = panel.playerInput.trim();
         if (!input.equalsIgnoreCase(identifier) && !input.equalsIgnoreCase(name)) return;
         panel.gamemodePlayer = input;
         panel.gamemodeMode = mode == null || mode.isBlank() ? "unknown" : mode;
-        if (panel.gamemodeButton != null) panel.gamemodeButton.setMessage(panel.gameModeLabel(panel.gamemodeMode));
+        panel.gamemodeLocked = locked;
+        panel.refreshGameModeWidgets();
+    }
+
+    /**
+     * 把已知的游戏模式与锁定状态同步到模式切换按钮和锁定按钮上。
+     *
+     * <p>只有在“最近一次回包的对象与输入框当前内容一致”时才算已知状态：输入框换成别的玩家后，
+     * 两个按钮立刻回到未查询的显示，避免把上一个玩家的模式或锁定状态当成当前输入对象的。
+     * 模式切换按钮在已知且被锁定时禁用（参照原版难度锁定，只能先解锁）；未知状态仍可点击，
+     * 点击即发 cycle 命令，服务端的回包会把状态补上。
+     */
+    private void refreshGameModeWidgets() {
+        boolean known = !gamemodePlayer.isBlank() && gamemodePlayer.equalsIgnoreCase(playerInput.trim());
+        if (gamemodeButton != null) {
+            gamemodeButton.setMessage(gameModeLabel(known ? gamemodeMode : "unknown"));
+            gamemodeButton.active = !(known && gamemodeLocked);
+        }
+        if (gamemodeLockButton != null) {
+            gamemodeLockButton.setMessage(gameModeLockLabel(known && gamemodeLocked));
+        }
     }
 
     private Component gameModeLabel(String mode) {
         return Component.translatable("screen.severownercontrolpanel.gamemode_current").append(Component.literal(mode));
+    }
+
+    /** 锁定按钮文字：与模式切换按钮一致，直接显示它当前所处的状态。 */
+    private Component gameModeLockLabel(boolean locked) {
+        return Component.translatable("screen.severownercontrolpanel.gamemode_lock",
+                Component.translatable(locked
+                        ? "screen.severownercontrolpanel.gamemode_locked"
+                        : "screen.severownercontrolpanel.gamemode_unlocked"));
+    }
+
+    /** 分组列表回包：在分组页以文字动态展示服务端返回的结果。 */
+    public static void updateGroupsList(String text) {
+        ControlScreen panel = activeScreen();
+        if (panel == null) return;
+        panel.groupsListText = text == null ? "" : text;
     }
 
     public static void updateRespawnOptions(String selected, String encodedOptions) {
@@ -168,18 +206,29 @@ public final class ControlScreen extends Screen {
         EditBox group = field("screen.severownercontrolpanel.group_name", "", 198, 98, 170);
         action("screen.severownercontrolpanel.group_add", 378, 98, 78, () -> sendPlayerGroup(player, group, "add"));
         action("screen.severownercontrolpanel.group_remove", 462, 98, 78, () -> sendPlayerGroup(player, group, "remove"));
-        action("screen.severownercontrolpanel.panel_enable", 18, 132, 118, () -> sendPlayerPanel(player, true));
-        action("screen.severownercontrolpanel.panel_disable", 142, 132, 118, () -> sendPlayerPanel(player, false));
-        action("screen.severownercontrolpanel.player_kick", 266, 132, 86, () -> sendPlayerAction(player, "kick"));
+        action("screen.severownercontrolpanel.panel_enable", 18, 132, 110, () -> sendPlayerPanel(player, true));
+        action("screen.severownercontrolpanel.panel_disable", 134, 132, 110, () -> sendPlayerPanel(player, false));
+        action("screen.severownercontrolpanel.player_kick", 250, 132, 86, () -> sendPlayerAction(player, "kick"));
         playerInput = player.getValue();
-        gamemodeButton = Button.builder(gameModeLabel(gamemodePlayer.equalsIgnoreCase(playerInput.trim()) ? gamemodeMode : "unknown"), button -> {
+        // 输入框内容一变就按新对象刷新模式/锁定按钮，避免按钮继续显示上一个玩家的状态。
+        player.setResponder(value -> {
+            playerInput = value;
+            refreshGameModeWidgets();
+        });
+        // 参照原版难度设置：状态切换按钮旁边紧跟锁定按钮，锁定后切换按钮被禁用。
+        gamemodeButton = Button.builder(gameModeLabel("unknown"), button -> {
                     playerInput = player.getValue();
-                    gamemodePlayer = playerInput.trim();
                     sendPlayerAction(player, "gamemode cycle");
-                }).bounds(left + 358, top + 132, 98, 20).build();
+                }).bounds(left + 342, top + 132, 100, 20).build();
         addRenderableWidget(gamemodeButton);
-        action("screen.severownercontrolpanel.list_players", 462, 132, 78, () -> sendCommand("socp players"));
-        drawHint("screen.severownercontrolpanel.players_hint", 18, 178);
+        gamemodeLockButton = Button.builder(gameModeLockLabel(false), button -> {
+                    playerInput = player.getValue();
+                    sendPlayerAction(player, "gamemode lock");
+                }).bounds(left + 448, top + 132, 100, 20).build();
+        addRenderableWidget(gamemodeLockButton);
+        action("screen.severownercontrolpanel.list_players", 18, 166, 118, () -> sendCommand("socp players"));
+        drawHint("screen.severownercontrolpanel.players_hint", 18, 202);
+        refreshGameModeWidgets();
     }
 
     private void buildGroupsPage() {
@@ -190,8 +239,25 @@ public final class ControlScreen extends Screen {
         action("screen.severownercontrolpanel.group_delete", 440, 98, 100, () -> sendCommand("socp groups delete " + word(name)));
         action("screen.severownercontrolpanel.list_groups", 18, 132, 118, () -> sendCommand("socp groups list"));
         action("screen.severownercontrolpanel.group_kick", 142, 132, 136, () -> sendCommand("socp groups kick " + word(name)));
-        drawHint("screen.severownercontrolpanel.groups_hint", 18, 178);
-        drawHint("screen.severownercontrolpanel.group_colors_hint", 18, 222);
+        // 分组列表回包（groups_list）只更新字段，这里每帧读取最新内容，并裁剪在固定区域内换行展示。
+        addRenderableOnly((graphics, mouseX, mouseY, partialTick) -> {
+            graphics.drawString(font, Component.translatable("screen.severownercontrolpanel.groups_list_heading"),
+                    left + 18, top + 158, 0xFF8FE3C1, false);
+            graphics.enableScissor(left + 14, top + 172, left + PANEL_WIDTH - 14, top + 238);
+            String body = groupsListText.isBlank()
+                    ? Component.translatable("screen.severownercontrolpanel.groups_list_empty").getString()
+                    : groupsListText;
+            int lineY = top + 174;
+            for (String line : body.split("\\R", -1)) {
+                if (lineY > top + 230) break;
+                graphics.drawString(font, font.plainSubstrByWidth(line, PANEL_WIDTH - 40),
+                        left + 18, lineY, 0xFFD7E4E1, false);
+                lineY += 11;
+            }
+            graphics.disableScissor();
+        });
+        drawHint("screen.severownercontrolpanel.groups_hint", 18, 244);
+        drawHint("screen.severownercontrolpanel.group_colors_hint", 18, 272);
     }
 
     private void buildRulesPage() {
@@ -200,13 +266,11 @@ public final class ControlScreen extends Screen {
         EditBox trigger = ruleField("screen.severownercontrolpanel.rule_trigger", "trigger", 144, 98, 118);
         EditBox target = ruleField("screen.severownercontrolpanel.rule_target", "target", 270, 98, 118);
         EditBox action = ruleField("screen.severownercontrolpanel.rule_action", "action", 396, 98, 118);
-        EditBox value = ruleField("screen.severownercontrolpanel.rule_value", "value", 18, 132, 366);
-        EditBox template = ruleField("screen.severownercontrolpanel.rule_template", "template", 396, 132, 118);
-        action("screen.severownercontrolpanel.rule_add", 18, 166, 92, () -> sendRule(id, trigger, target, action, value));
-        action("screen.severownercontrolpanel.rule_remove", 118, 166, 92, () -> sendCommand("socp rule remove " + word(id)));
-        action("screen.severownercontrolpanel.rule_template_create", 218, 166, 146, () -> sendCommand("socp rule template " + word(id) + " " + word(template) + " " + word(target)));
-        action("screen.severownercontrolpanel.list_rules", 372, 166, 104, () -> sendCommand("socp rule list"));
-        drawHint("screen.severownercontrolpanel.rules_hint", 18, 210);
+        EditBox value = ruleField("screen.severownercontrolpanel.rule_value", "value", 18, 132, 496);
+        action("screen.severownercontrolpanel.rule_add", 18, 166, 118, () -> sendRule(id, trigger, target, action, value));
+        action("screen.severownercontrolpanel.rule_remove", 142, 166, 118, () -> sendCommand("socp rule remove " + word(id)));
+        action("screen.severownercontrolpanel.list_rules", 266, 166, 118, () -> sendCommand("socp rule list"));
+        drawHint("screen.severownercontrolpanel.rules_hint", 18, 202);
     }
 
     private void buildRespawnsPage() {
@@ -263,7 +327,7 @@ public final class ControlScreen extends Screen {
             itemInput = item.getValue();
             queryItemStatus();
         });
-        action("screen.severownercontrolpanel.item_cooldown_button", 18, 132, 158, () -> openCooldownScreen(target, item));
+        action("screen.severownercontrolpanel.item_edit_button", 18, 132, 158, () -> openItemEditor(target, item));
         action("screen.severownercontrolpanel.item_list", 184, 132, 100, () -> sendCommand("socp item list"));
         action("screen.severownercontrolpanel.item_clear_all", 290, 132, 130, this::clearAllItemRules);
         action("screen.severownercontrolpanel.item_blocked_list", 426, 132, 114, () -> openBlockedList(target));
@@ -305,11 +369,24 @@ public final class ControlScreen extends Screen {
         queryItemStatus();
     }
 
-    private void openCooldownScreen(EditBox target, EditBox item) {
+    /**
+     * 打开统一的物品规则编辑界面：物品管理页的“编辑该物品规则”和禁用物品列表里点击某一行
+     * 走的是同一个 {@link ItemRuleScreen}，可设置可使用状态与冷却时间，不再各开一套界面。
+     * 界面的初始状态只在与最近一次查询结果一致时才套用，避免把上一个物品的状态显示成当前物品的。
+     */
+    private void openItemEditor(EditBox target, EditBox item) {
         itemTargetInput = target.getValue();
         itemInput = item.getValue();
-        if (itemTargetInput.trim().isEmpty() || itemInput.trim().isEmpty()) return;
-        if (minecraft != null) minecraft.setScreen(new ItemCooldownScreen(this, itemTargetInput.trim(), itemInput.trim(), itemCooldown));
+        String rawTarget = itemTargetInput.trim();
+        String rawItem = itemInput.trim();
+        if (rawTarget.isEmpty() || rawItem.isEmpty() || minecraft == null) return;
+        String resolved = ItemResolver.resolveToId(rawItem);
+        itemResolvedInput = resolved;
+        boolean sameQuery = itemQueryA.equals(rawTarget) && itemResolvedInput.equalsIgnoreCase(resolved);
+        String targetDisplay = sameQuery && !itemTargetDesc.isBlank() ? itemTargetDesc : rawTarget;
+        minecraft.setScreen(new ItemRuleScreen(this, rawTarget, targetDisplay, resolved, ItemResolver.displayOfId(resolved),
+                "", sameQuery && Boolean.TRUE.equals(itemDisabled), sameQuery && itemCooldown > 0 ? itemCooldown : 0,
+                this::queryItemStatus));
     }
 
     void queryItemStatus() {
@@ -326,22 +403,6 @@ public final class ControlScreen extends Screen {
         // 服务端回包里的物品字段就是这里发出的规范 ID，记录后用于回包比对。
         itemResolvedInput = resolved;
         sendCommand("socp item " + operation + " " + quote(target) + " " + quote(resolved));
-    }
-
-    /**
-     * 冷却秒数需大于 0 且不超过 16 位整型上限，支持 1.5 这类小数。
-     * 命令语法是 /socp item cooldown &lt;对象&gt; &lt;物品&gt; &lt;秒数&gt;，秒数必须放在最后，
-     * 不能复用 sendItemCommand（那会把 operation 拼在对象/物品之前，导致服务端把物品当成秒数解析）。
-     */
-    void sendItemCooldown(String seconds) {
-        String value = seconds == null ? "" : seconds.trim();
-        if (!ItemCooldownScreen.isValidSeconds(value)) return;
-        String target = itemTargetInput.trim();
-        String item = itemInput.trim();
-        if (target.isEmpty() || item.isEmpty()) return;
-        String resolved = ItemResolver.resolveToId(item);
-        itemResolvedInput = resolved;
-        sendCommand("socp item cooldown " + quote(target) + " " + quote(resolved) + " " + value);
     }
 
     private String quote(String value) {

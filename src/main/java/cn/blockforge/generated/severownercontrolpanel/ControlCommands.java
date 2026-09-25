@@ -41,7 +41,6 @@ public final class ControlCommands {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final String[] TRIGGERS = {"join", "first_join", "interval", "death", "respawn"};
     private static final String[] ACTIONS = {"message", "give", "effect", "teleport", "clear_effects"};
-    private static final String[] TEMPLATES = {"join", "first_join", "interval", "death", "respawn"};
     private static final String[] COLORS = {
             "red", "blue", "purple", "green", "lime", "yellow", "gold", "orange", "aqua", "cyan",
             "light_blue", "pink", "magenta", "white", "gray", "grey", "dark_gray", "black", "dark_red",
@@ -130,6 +129,16 @@ public final class ControlCommands {
         return null;
     }
 
+    /** 把目标玩家当前的游戏模式与锁定状态回传给面板，界面据此更新按钮文字并禁用锁定后的切换按钮。 */
+    private static void sendGameModeUpdate(CommandSourceStack source, ServerPlayer target) {
+        ServerPlayer requester = source.getPlayer();
+        if (requester == null || target == null) return;
+        String data = target.getUUID() + "\u001f" + target.getName().getString() + "\u001f"
+                + target.gameMode.getGameModeForPlayer().getName() + "\u001f"
+                + (ControlData.isGameModeLocked(target.getUUID().toString()) ? "1" : "0");
+        SocpNetwork.sendToPlayer(requester, new SocpPayload("gamemode_update", data));
+    }
+
     private static CompletableFuture<com.mojang.brigadier.suggestion.Suggestions> suggestTeleportTargets(SuggestionsBuilder builder) {
         List<String> values = new ArrayList<>();
         values.add("all");
@@ -191,18 +200,29 @@ public final class ControlCommands {
             String player = StringArgumentType.getString(context, "player");
             return feedback(context.getSource(), ControlData.kickPlayer(player) ? "玩家已踢出" : "目标玩家不在线");
         });
-        var gamemode = Commands.literal("gamemode").then(Commands.literal("cycle").executes(context -> {
-            String identifier = StringArgumentType.getString(context, "player");
-            ServerPlayer target = ControlData.findOnlinePlayer(identifier);
-            String next = ControlData.cycleGameMode(identifier);
-            if (next.isBlank() || target == null) return feedback(context.getSource(), "目标玩家不在线");
-            ServerPlayer requester = context.getSource().getPlayer();
-            if (requester != null) {
-                String data = target.getUUID() + "\u001f" + target.getName().getString() + "\u001f" + next;
-                SocpNetwork.sendToPlayer(requester, new SocpPayload("gamemode_update", data));
-            }
-            return feedback(context.getSource(), "玩家游戏模式已切换为 " + next);
-        }));
+        var gamemode = Commands.literal("gamemode")
+                .then(Commands.literal("cycle").executes(context -> {
+                    String identifier = StringArgumentType.getString(context, "player");
+                    ServerPlayer target = ControlData.findOnlinePlayer(identifier);
+                    if (target == null) return feedback(context.getSource(), "目标玩家不在线");
+                    if (ControlData.isGameModeLocked(identifier)) {
+                        return feedback(context.getSource(), "该玩家的游戏模式已被锁定，请先解锁");
+                    }
+                    String next = ControlData.cycleGameMode(identifier);
+                    if (next.isBlank()) return feedback(context.getSource(), "目标玩家不在线");
+                    sendGameModeUpdate(context.getSource(), target);
+                    return feedback(context.getSource(), "玩家游戏模式已切换为 " + next);
+                }))
+                .then(Commands.literal("lock").executes(context -> {
+                    String identifier = StringArgumentType.getString(context, "player");
+                    ServerPlayer target = ControlData.findOnlinePlayer(identifier);
+                    if (target == null) return feedback(context.getSource(), "目标玩家不在线才能锁定游戏模式");
+                    ControlData.toggleGameModeLock(identifier);
+                    sendGameModeUpdate(context.getSource(), target);
+                    return feedback(context.getSource(), ControlData.isGameModeLocked(identifier)
+                            ? "已锁定该玩家的游戏模式为 " + target.gameMode.getGameModeForPlayer().getName()
+                            : "已解除该玩家的游戏模式锁定");
+                }));
         var panel = Commands.literal("panel")
                 .then(Commands.argument("enabled", BoolArgumentType.bool())
                         .suggests((context, builder) -> suggest(builder, "true", "false"))
@@ -436,7 +456,8 @@ public final class ControlCommands {
         return feedback(source, count == 0 ? "没有匹配到可切换的物品" : "已切换 " + count + " 件物品的可使用状态");
     }
 
-    private static LiteralArgumentBuilder<CommandSourceStack> ruleCommands() {        var remove = Commands.literal("remove")
+    private static LiteralArgumentBuilder<CommandSourceStack> ruleCommands() {
+        var remove = Commands.literal("remove")
                 .then(Commands.argument("id", StringArgumentType.word())
                         .suggests((context, builder) -> suggestRules(builder))
                         .executes(context -> {
@@ -457,20 +478,9 @@ public final class ControlCommands {
         var add = Commands.literal("add")
                 .then(Commands.argument("id", StringArgumentType.word())
                         .suggests((context, builder) -> suggestRules(builder)).then(trigger));
-        var template = Commands.literal("template")
-                .then(Commands.argument("id", StringArgumentType.word())
-                        .suggests((context, builder) -> suggestRules(builder))
-                        .then(Commands.argument("template", StringArgumentType.word())
-                                .suggests((context, builder) -> suggest(builder, TEMPLATES))
-                                .then(Commands.argument("target", StringArgumentType.word())
-                                        .suggests((context, builder) -> suggestTargets(builder))
-                                        .executes(context -> {
-                                            ControlData.addRule(StringArgumentType.getString(context, "id"), StringArgumentType.getString(context, "template"), StringArgumentType.getString(context, "target"), "message", "欢迎来到服务器", 0);
-                                            return feedback(context.getSource(), "规则模板已创建");
-                                        }))));
         return Commands.literal("rule")
                 .then(Commands.literal("list").executes(context -> rules(context.getSource())))
-                .then(remove).then(add).then(template);
+                .then(remove).then(add);
     }
 
     private static CompletableFuture<com.mojang.brigadier.suggestion.Suggestions> suggestTargets(SuggestionsBuilder builder) {
@@ -544,7 +554,18 @@ public final class ControlCommands {
 
     private static int status(CommandSourceStack source) { return feedback(source, ControlData.summary()); }
     private static int players(CommandSourceStack source) { String list = ControlData.listPlayers(); return feedback(source, list.isBlank() ? "暂无玩家记录" : list); }
-    private static int groups(CommandSourceStack source) { String list = ControlData.listGroups(); return feedback(source, list.isBlank() ? "暂无分组" : list); }
+
+    /**
+     * 分组列表：聊天框照旧输出，同时把同一段文本回传给面板，
+     * 让分组页用文字动态显示结果，而不是只有聊天框可见。
+     */
+    private static int groups(CommandSourceStack source) {
+        String list = ControlData.listGroups();
+        String message = list.isBlank() ? "暂无分组" : list;
+        ServerPlayer requester = source.getPlayer();
+        if (requester != null) SocpNetwork.sendToPlayer(requester, new SocpPayload("groups_list", message));
+        return feedback(source, message);
+    }
     private static int rules(CommandSourceStack source) { String list = ControlData.listRules(); return feedback(source, list.isBlank() ? "暂无规则" : list); }
 
     private static int feedback(CommandSourceStack source, String message) {

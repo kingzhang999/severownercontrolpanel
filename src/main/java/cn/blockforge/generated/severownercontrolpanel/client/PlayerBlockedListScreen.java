@@ -6,10 +6,7 @@ import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.components.ObjectSelectionList;
 import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceLocation;
-import net.minecraft.world.item.Item;
 import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
@@ -100,8 +97,7 @@ public final class PlayerBlockedListScreen extends Screen {
     /** 面板子界面共同的父链访问；链上其余屏幕的父级一律视为面板根（ControlScreen）。 */
     static Screen parentOf(Screen screen) {
         if (screen instanceof PlayerBlockedListScreen list) return list.parent;
-        if (screen instanceof ItemCooldownScreen cooldown) return cooldown.parent;
-        if (screen instanceof ItemRuleEditScreen edit) return edit.parent;
+        if (screen instanceof ItemRuleScreen rule) return rule.parent;
         if (screen instanceof GroupPlayerListScreen group) return group.parent;
         return null;
     }
@@ -134,12 +130,13 @@ public final class PlayerBlockedListScreen extends Screen {
         runCommand(command.toString());
     }
 
-    /** 点击/回车某一行时打开该物品的编辑菜单。 */
+    /** 点击/回车某一行时打开该物品的统一编辑界面。 */
     private void openEditor(String[] row) {
         // 分组继承来的规则要用分组名去编辑，玩家自身的规则才用玩家键，否则会误建一条重复的玩家规则。
         String ruleTarget = row.length >= 5 && !row[4].isBlank() ? row[4] : playerKey;
-        String ruleSource = row.length >= 6 && !row[5].isBlank() ? row[5] : playerDisplay;
-        minecraft.setScreen(new ItemRuleEditScreen(this, playerKey, playerDisplay, ruleTarget, ruleSource, row[0], "1".equals(row[1]), parseSeconds(row[2])));
+        String ruleSource = row.length >= 6 && !row[5].isBlank() ? row[5] : "";
+        minecraft.setScreen(new ItemRuleScreen(this, ruleTarget, playerDisplay, row[0], row[0], ruleSource,
+                "1".equals(row[1]), parseSeconds(row[2]), this::refreshFromServer));
     }
 
     private static double parseSeconds(String value) {
@@ -152,11 +149,7 @@ public final class PlayerBlockedListScreen extends Screen {
 
     /** 物品在当前语言下的显示名；注册表查不到时退回原始 ID。 */
     private String displayOf(String itemId) {
-        ResourceLocation location = ResourceLocation.tryParse(itemId);
-        Item item = location == null ? null : BuiltInRegistries.ITEM.get(location);
-        if (item == null || item == net.minecraft.world.item.Items.AIR) return itemId;
-        String display = ItemResolver.displayOf(item);
-        return display == null || display.isEmpty() ? itemId : display;
+        return ItemResolver.displayOfId(itemId);
     }
 
     /** 含空格的对象名加引号，避免命令参数被截断。 */
