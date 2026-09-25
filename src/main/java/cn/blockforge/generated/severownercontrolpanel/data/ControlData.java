@@ -48,6 +48,8 @@ public final class ControlData {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static final String FILE_NAME = "severownercontrolpanel.json";
+    /** 每存档配置所在的 config/ 子目录。 */
+    private static final String CONFIG_DIRECTORY = "severownercontrolpanel";
     private static final Map<UUID, PlayerRecord> PLAYERS = new LinkedHashMap<>();
     private static final Map<String, GroupRecord> GROUPS = new LinkedHashMap<>();
     private static final List<RuleRecord> RULES = new ArrayList<>();
@@ -81,9 +83,13 @@ public final class ControlData {
         // 规则计时只对当前这次服务器生命周期有意义；重开存档时必须归零，否则会拿上次的游戏刻去比较。
         lastRuleTick = 0;
         LOGGER.info("SeverOwnerControlPanel initialized; multiplayer mode={}", isMultiplayer());
-        Path configDirectory = server.getServerDirectory().resolve("config");
-        file = configDirectory.resolve(FILE_NAME);
-        legacyFile = server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT).resolve(FILE_NAME);
+        // 配置文件仍在 config/ 下，但按存档分开：config/severownercontrolpanel/<存档名>.json
+        // LevelResource.ROOT 的 id 是 "."，getWorldPath(ROOT) 拿到的是 <存档目录>/.
+        // 必须先 normalize 掉末尾那个 "."，否则 getFileName() 返回 "."，文件名会变成 "..json" 并让所有存档互相覆盖。
+        Path worldRoot = server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT).normalize();
+        Path configDirectory = server.getServerDirectory().resolve("config").resolve(CONFIG_DIRECTORY);
+        file = configDirectory.resolve(worldRoot.getFileName() + ".json");
+        legacyFile = worldRoot.resolve(FILE_NAME);
         load();
     }
 
@@ -1207,9 +1213,11 @@ public final class ControlData {
         root.addProperty("schema", 4);
         try {
             Files.createDirectories(file.getParent());
-            Path temp = file.resolveSibling(FILE_NAME + ".tmp");
+            // 临时文件与备份必须跟着当前存档的文件名走，否则不同存档会互相覆盖同一个 .tmp / .bak。
+            String name = file.getFileName().toString();
+            Path temp = file.resolveSibling(name + ".tmp");
             Files.writeString(temp, GSON.toJson(root), StandardCharsets.UTF_8);
-            if (Files.exists(file)) Files.copy(file, file.resolveSibling(FILE_NAME + ".bak"), StandardCopyOption.REPLACE_EXISTING);
+            if (Files.exists(file)) Files.copy(file, file.resolveSibling(name + ".bak"), StandardCopyOption.REPLACE_EXISTING);
             Files.move(temp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
             LOGGER.info("配置已保存到 {}", file);
         } catch (IOException exception) {
@@ -1228,7 +1236,7 @@ public final class ControlData {
             catch (RuntimeException invalid) {
                 // 损坏的配置不能再静默丢弃：先说明原因，再尝试从上次保存的备份恢复。
                 LOGGER.error("配置文件 {} 内容损坏，尝试从备份恢复", source, invalid);
-                Path backup = source.resolveSibling(FILE_NAME + ".bak");
+                Path backup = source.resolveSibling(source.getFileName().toString() + ".bak");
                 if (!Files.exists(backup)) {
                     LOGGER.error("备份文件 {} 不存在，本次以空配置启动；请修复或删除原配置后重新保存", backup);
                     return;
