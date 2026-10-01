@@ -1,6 +1,7 @@
 package cn.blockforge.generated.severownercontrolpanel.client;
 
 import cn.blockforge.generated.severownercontrolpanel.data.ControlData;
+import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
@@ -32,6 +33,10 @@ public final class ControlScreen extends Screen {
     private Button gamemodeButton;
     private Button gamemodeLockButton;
     private String groupsListText = "";
+    /** 玩家页动态文字列表：每行是一个已保存玩家及其在线状态。 */
+    private final List<Component> playersStatusLines = new ArrayList<>();
+    private int playersStatusScroll;
+    private static final int PLAYERS_STATUS_ROWS = 6;
     private String itemTargetInput = "";
     private String itemInput = "";
     private String itemQueryA = "";
@@ -113,6 +118,34 @@ public final class ControlScreen extends Screen {
         ControlScreen panel = activeScreen();
         if (panel == null) return;
         panel.groupsListText = text == null ? "" : text;
+    }
+
+    /**
+     * 玩家状态回包：数据行以 \u001e 分隔，每行字段为 名字、UUID、是否在线(1/0)。
+     * 客户端据此在玩家页用动态文字列出所有已保存玩家及其状态，状态文字走语言文件，保证中英文一致。
+     */
+    public static void updatePlayersStatus(String data) {
+        ControlScreen panel = activeScreen();
+        if (panel == null) return;
+        panel.playersStatusLines.clear();
+        if (data != null && !data.isBlank()) {
+            for (String row : data.split("\u001e", -1)) {
+                if (row.isBlank()) continue;
+                String[] parts = row.split("\u001f", -1);
+                if (parts.length < 3) continue;
+                boolean online = "1".equals(parts[2]);
+                Component status = Component.translatable(online
+                                ? "screen.severownercontrolpanel.players_status_online"
+                                : "screen.severownercontrolpanel.players_status_offline")
+                        .withStyle(online ? ChatFormatting.GREEN : ChatFormatting.GRAY);
+                panel.playersStatusLines.add(Component.empty()
+                        .append(Component.literal(parts[0]).withStyle(ChatFormatting.WHITE))
+                        .append(Component.literal("  "))
+                        .append(status)
+                        .append(Component.literal("  " + parts[1]).withStyle(ChatFormatting.DARK_GRAY)));
+            }
+        }
+        panel.playersStatusScroll = 0;
     }
 
     public static void updateRespawnOptions(String selected, String encodedOptions) {
@@ -226,8 +259,11 @@ public final class ControlScreen extends Screen {
                     sendPlayerAction(player, "gamemode lock");
                 }).bounds(left + 448, top + 132, 100, 20).build();
         addRenderableWidget(gamemodeLockButton);
-        action("screen.severownercontrolpanel.list_players", 18, 166, 118, () -> sendCommand("socp players"));
-        drawHint("screen.severownercontrolpanel.players_hint", 18, 202);
+        // 玩家在线状态：服务端复检后回包，本页下方以动态文字列出，不再输出到聊天栏；它已完全取代原“列出玩家”。
+        action("screen.severownercontrolpanel.players_status", 18, 166, 150, () -> sendCommand("socp players status"));
+        // 清除全部配置从重生点页移到玩家页，与玩家/分组权限管理放在一起。
+        action("screen.severownercontrolpanel.clear_all", 174, 166, 140, () -> sendCommand("socp clear"));
+        drawHint("screen.severownercontrolpanel.players_hint", 18, 190);
         refreshGameModeWidgets();
     }
 
@@ -299,7 +335,6 @@ public final class ControlScreen extends Screen {
                 sendCommand("socp player " + word(player) + " respawn delete " + selectedRespawn);
             }
         });
-        action("screen.severownercontrolpanel.clear_all", 438, 166, 102, () -> sendCommand("socp clear"));
         drawHint("screen.severownercontrolpanel.respawns_hint", 18, 210);
     }
 
@@ -455,6 +490,44 @@ public final class ControlScreen extends Screen {
         return clean.length() <= 80 ? clean : clean.substring(0, 80) + "…";
     }
 
+    // ==== 玩家在线状态列表 ====
+
+    /** 玩家页下方的动态文字列表：标题显示总人数，列表区域可滚动，避免人数多时溢出面板。 */
+    private void drawPlayersStatus(GuiGraphics graphics) {
+        graphics.drawString(font, Component.translatable("screen.severownercontrolpanel.players_status_heading",
+                playersStatusLines.size()), left + 18, top + 222, 0xFF8FE3C1, false);
+        graphics.enableScissor(left + 14, top + 232, left + PANEL_WIDTH - 14, top + 298);
+        if (playersStatusLines.isEmpty()) {
+            graphics.drawString(font, Component.translatable("screen.severownercontrolpanel.players_status_empty"),
+                    left + 18, top + 234, 0xFF9DB6B0, false);
+        } else {
+            int last = Math.min(playersStatusLines.size(), playersStatusScroll + PLAYERS_STATUS_ROWS);
+            int lineY = top + 234;
+            for (int index = playersStatusScroll; index < last; index++) {
+                graphics.drawString(font, playersStatusLines.get(index), left + 18, lineY, 0xFFFFFFFF, false);
+                lineY += 11;
+            }
+        }
+        graphics.disableScissor();
+    }
+
+    private boolean overPlayersStatus(double mouseX, double mouseY) {
+        return mouseX >= left + 14 && mouseX <= left + PANEL_WIDTH - 14
+                && mouseY >= top + 232 && mouseY <= top + 298;
+    }
+
+    /** 玩家状态列表支持滚轮翻看：只在玩家页、列表非空且指针位于列表区域时消费滚轮。 */
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        if (page == 0 && !playersStatusLines.isEmpty() && overPlayersStatus(mouseX, mouseY)) {
+            int max = Math.max(0, playersStatusLines.size() - PLAYERS_STATUS_ROWS);
+            if (scrollY < 0) playersStatusScroll = Math.min(max, playersStatusScroll + 1);
+            else if (scrollY > 0) playersStatusScroll = Math.max(0, playersStatusScroll - 1);
+            return true;
+        }
+        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+    }
+
     private void sendTeleport(EditBox target, EditBox position) {
         String targetName = word(target);
         String coordinates = position.getValue().trim();
@@ -542,6 +615,7 @@ public final class ControlScreen extends Screen {
         graphics.fill(left, top, left + PANEL_WIDTH, top + 3, 0xFF41C7A3);
         graphics.drawString(font, title, left + 14, top + 10, 0xFFE9F4F1, false);
         super.render(graphics, mouseX, mouseY, partialTick);
+        if (page == 0) drawPlayersStatus(graphics);
         if (page == 5) drawItemInfo(graphics);
     }
 

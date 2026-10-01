@@ -58,7 +58,9 @@ public final class ControlCommands {
                 .then(Commands.literal("save").executes(context -> save(context.getSource())))
                 .then(Commands.literal("clear").executes(context -> clear(context.getSource())))
                 .then(Commands.literal("status").executes(context -> status(context.getSource())))
-                .then(Commands.literal("players").executes(context -> players(context.getSource())))
+                // “列出玩家”功能已由“玩家在线状态”完全取代，这里只保留 status 子命令。
+                .then(Commands.literal("players")
+                        .then(Commands.literal("status").executes(context -> playersStatus(context.getSource()))))
                 .then(Commands.literal("respawns").executes(context -> respawns(context.getSource())))
                 .then(teleportCommands())
                 .then(groupCommands())
@@ -525,7 +527,7 @@ public final class ControlCommands {
     private static void sendVanillaPanel(ServerPlayer player) {
         player.sendSystemMessage(Component.literal("[服务器管理面板] 未安装客户端模组，已切换为原版指令面板。"));
         player.sendSystemMessage(panelButton("查看状态", "/socp status")
-                .append(Component.literal("  ")).append(panelButton("玩家列表", "/socp players"))
+                .append(Component.literal("  ")).append(panelButton("玩家状态", "/socp players status"))
                 .append(Component.literal("  ")).append(panelButton("分组列表", "/socp groups list")));
         player.sendSystemMessage(panelButton("规则列表", "/socp rule list")
                 .append(Component.literal("  ")).append(panelButton("重生点记录", "/socp respawns"))
@@ -553,7 +555,20 @@ public final class ControlCommands {
     }
 
     private static int status(CommandSourceStack source) { return feedback(source, ControlData.summary()); }
-    private static int players(CommandSourceStack source) { String list = ControlData.listPlayers(); return feedback(source, list.isBlank() ? "暂无玩家记录" : list); }
+
+    /**
+     * 玩家在线状态：结果回传给面板，由玩家页以动态文字展示，不再输出到聊天栏。
+     * 仅在回包送不出去时（客户端未安装模组）退回聊天框文本，避免原版指令面板点了没反应。
+     */
+    private static int playersStatus(CommandSourceStack source) {
+        ServerPlayer requester = source.getPlayer();
+        if (requester != null) {
+            boolean delivered = ControlData.sendPlayerStatus(requester);
+            if (delivered) return 1;
+        }
+        String list = ControlData.playerStatusText();
+        return feedback(source, list.isBlank() ? "暂无玩家记录" : list);
+    }
 
     /**
      * 分组列表：聊天框照旧输出，同时把同一段文本回传给面板，

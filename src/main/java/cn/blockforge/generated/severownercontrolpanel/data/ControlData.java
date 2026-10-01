@@ -36,6 +36,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -75,6 +76,8 @@ public final class ControlData {
     private static Path legacyFile;
     private static long lastRuleTick;
     private static long nextRespawnOrder;
+    /** 多人游戏开启后是否已完成首次在线玩家扫描；每次服务器启动归零。 */
+    private static boolean multiplayerScanned;
 
     private ControlData() {}
 
@@ -82,6 +85,8 @@ public final class ControlData {
         server = minecraftServer;
         // 规则计时只对当前这次服务器生命周期有意义；重开存档时必须归零，否则会拿上次的游戏刻去比较。
         lastRuleTick = 0;
+        // 首次在线扫描标志同理：新的一次服务器生命周期要重新扫描一遍在线玩家。
+        multiplayerScanned = false;
         LOGGER.info("SeverOwnerControlPanel initialized; multiplayer mode={}", isMultiplayer());
         // 配置文件仍在 config/ 下，但按存档分开：config/severownercontrolpanel/<存档名>.json
         // LevelResource.ROOT 的 id 是 "."，getWorldPath(ROOT) 拿到的是 <存档目录>/.
@@ -908,8 +913,30 @@ public final class ControlData {
         return true;
     }
 
+    /**
+     * 多人游戏开启后自动检测当前在线玩家：把尚未入库的在线玩家加入玩家列表，
+     * 并把每个已保存玩家的在线状态刷新为“当前是否在线”。
+     *
+     * <p>触发时机严格受控：多人游戏刚开启时由 {@link #tick(MinecraftServer)} 扫描一次
+     * （专用服务器启动或本地存档“对局域网开放”都会覆盖），之后只在有新玩家加入时再触发一次；
+     * 另有玩家登出时只把该玩家标记为离线，不做全量扫描。面板的“玩家在线状态”按钮属于用户主动刷新。
+     */
+    public static void detectOnlinePlayers() {
+        if (server == null) return;
+        Set<UUID> online = new HashSet<>();
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            online.add(player.getUUID());
+            // getPlayer 会把未入库的在线玩家自动加入列表，并同步最新名字。
+            getPlayer(player);
+        }
+        for (PlayerRecord record : PLAYERS.values()) record.online = online.contains(record.uuid);
+        LOGGER.info("在线玩家检测完成：在线 {} 人，玩家列表共 {} 人", online.size(), PLAYERS.size());
+    }
+
     public static void registerLogin(ServerPlayer player) {
         if (!isMultiplayer()) return;
+        // 有新玩家加入服务器时触发一次检测：新玩家自动入库，其余已保存玩家的状态一并刷新。
+        detectOnlinePlayers();
         PlayerRecord record = getPlayer(player);
         boolean first = !record.seen;
         record.name = player.getName().getString();
@@ -920,6 +947,14 @@ public final class ControlData {
         LOGGER.info("玩家登录 {} ({})", player.getName().getString(), player.getUUID());
         runRules(player, first ? "first_join" : "join");
         player.sendSystemMessage(Component.translatable(first ? "message.severownercontrolpanel.first_join" : "message.severownercontrolpanel.welcome"));
+    }
+
+    /** 玩家登出：只把这一名玩家标记为离线，让玩家列表里的状态及时反映真实在线情况。 */
+    public static void registerLogout(ServerPlayer player) {
+        if (!isMultiplayer() || player == null) return;
+        PlayerRecord record = PLAYERS.get(player.getUUID());
+        if (record != null) record.online = false;
+        LOGGER.info("玩家登出 {} ({})", player.getName().getString(), player.getUUID());
     }
 
     public static void registerDeath(LivingEntity entity) {
@@ -939,6 +974,12 @@ public final class ControlData {
 
     public static void tick(MinecraftServer minecraftServer) {
         if (!isMultiplayer()) return;
+        // 多人游戏开启后的首次扫描：专用服务器在启动后的第一个 tick 命中，
+        // 本地存档“对局域网开放”则在开放后的第一个 tick 命中（开放前 isMultiplayer() 为 false）。
+        if (!multiplayerScanned) {
+            multiplayerScanned = true;
+            detectOnlinePlayers();
+        }
         enforceGameModeLocks(minecraftServer);
         flushPendingCooldowns();
         pruneExpiredCooldowns();
@@ -1177,9 +1218,39 @@ public final class ControlData {
 
     public static String summary() { return "玩家 " + PLAYERS.size() + " | 分组 " + GROUPS.size() + " | 规则 " + RULES.size() + " | 物品规则 " + ITEM_RULES.size(); }
 
-    public static String listPlayers() {
+    /** 已保存玩家按名字排序后的副本，保证面板列表与聊天反馈顺序稳定。 */
+    private static List<PlayerRecord> sortedPlayers() {
+        List<PlayerRecord> records = new ArrayList<>(PLAYERS.values());
+        records.sort((a, b) -> String.CASE_INSENSITIVE_ORDER.compare(
+                a.name == null ? "" : a.name, b.name == null ? "" : b.name));
+        return records;
+    }
+
+    /**
+     * 面板“玩家在线状态”按钮入口：先复检一次在线情况，再把所有已保存玩家连同状态回传，
+     * 客户端用动态文字在玩家页列出。每行字段依次为：名字、UUID、是否在线（1/0），行以 \u001e 分隔。
+     *
+     * @return 回包是否成功送达客户端模组；未安装模组时返回 false，调用方据此决定是否退回聊天框输出
+     */
+    public static boolean sendPlayerStatus(ServerPlayer requester) {
+        if (requester == null) return false;
+        detectOnlinePlayers();
         StringBuilder builder = new StringBuilder();
-        PLAYERS.forEach((id, record) -> builder.append(record.name).append(" (").append(id).append(") [").append(String.join(",", record.groups)).append("]\n"));
+        for (PlayerRecord record : sortedPlayers()) {
+            if (builder.length() > 0) builder.append('\u001e');
+            builder.append(sanitize(record.name)).append('\u001f').append(record.uuid).append('\u001f')
+                    .append(record.online ? '1' : '0');
+        }
+        return SocpNetwork.sendToPlayer(requester, new SocpPayload("players_status", builder.toString()));
+    }
+
+    /** 未安装客户端模组时的聊天框回退文本：名字、UUID、在线状态，每行一名玩家。 */
+    public static String playerStatusText() {
+        StringBuilder builder = new StringBuilder();
+        for (PlayerRecord record : sortedPlayers()) {
+            builder.append(record.name).append(" (").append(record.uuid).append(") | ")
+                    .append(record.online ? "在线" : "离线").append('\n');
+        }
         return builder.toString();
     }
 
@@ -1297,6 +1368,8 @@ public final class ControlData {
     public static final class PlayerRecord {
         UUID uuid; String name; boolean seen; Boolean panel; String selectedRespawn = "";
         boolean gameModeLocked; String lockedGameMode = "";
+        /** 运行时在线状态，由 {@link #detectOnlinePlayers()} 维护，不写入配置文件（重启后先按离线处理）。 */
+        boolean online;
         final List<String> groups = new ArrayList<>(); final Map<String, RespawnPoint> respawns = new LinkedHashMap<>();
         PlayerRecord(String name) { this.name = name; }
         JsonObject toJson(String id) { JsonObject json = new JsonObject(); json.addProperty("uuid", id); json.addProperty("name", name); json.addProperty("seen", seen); if (panel == null) json.add("panel", com.google.gson.JsonNull.INSTANCE); else json.addProperty("panel", panel); json.addProperty("selectedRespawn", selectedRespawn); json.addProperty("gameModeLocked", gameModeLocked); json.addProperty("lockedGameMode", lockedGameMode); JsonArray groupArray = new JsonArray(); groups.forEach(groupArray::add); json.add("groups", groupArray); JsonObject respawnJson = new JsonObject(); respawns.forEach((key, point) -> respawnJson.add(key, point.toJson())); json.add("respawns", respawnJson); return json; }

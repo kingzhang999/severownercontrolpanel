@@ -95,6 +95,7 @@ public final class ClientEvents {
                 if (parts.length >= 3) ControlScreen.updateGameMode(parts[0], parts[1], parts[2], parts.length >= 4 && "1".equals(parts[3]));
             }
             case "groups_list" -> ControlScreen.updateGroupsList(payload.data());
+            case "players_status" -> ControlScreen.updatePlayersStatus(payload.data());
             case "item_status" -> ControlScreen.applyItemStatus(payload.data().split("\u001f", -1));
             case "blocked_list" -> PlayerBlockedListScreen.handleListData(payload.data());
             case "group_players" -> GroupPlayerListScreen.handleGroupData(payload.data());

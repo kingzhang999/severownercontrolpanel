@@ -53,6 +53,12 @@ public final class ServerEvents {
         if (event.getEntity() instanceof ServerPlayer player) ControlData.registerLogin(player);
     }
 
+    /** 玩家登出时把该玩家标记为离线，玩家状态列表随即可见。 */
+    @SubscribeEvent
+    public static void logout(PlayerEvent.PlayerLoggedOutEvent event) {
+        if (event.getEntity() instanceof ServerPlayer player) ControlData.registerLogout(player);
+    }
+
     @SubscribeEvent
     public static void death(LivingDeathEvent event) { ControlData.registerDeath(event.getEntity()); }
 
